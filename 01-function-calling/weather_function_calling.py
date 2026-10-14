@@ -1,12 +1,8 @@
+
 """Minh hoạ FUNCTION CALLING thuần với Google Gemini SDK.
 
-Tool `get_weather` được định nghĩa schema thủ công VÀ thực thi ngay trong
-chính file app này. Model chỉ QUYẾT ĐỊNH gọi tool nào; app mới là nơi chạy.
-
-Cách chạy:
-    pip install -r ../requirements.txt
-    export GEMINI_API_KEY=...
-    python weather_function_calling.py
+Model quyết định gọi tool; ứng dụng thực thi tool.
+Dữ liệu thời tiết trong file này là giả lập.
 """
 
 from google import genai
@@ -19,8 +15,9 @@ MODEL = "gemini-2.5-flash"
 SYSTEM_INSTRUCTION = (
     "Bạn là trợ lý thời tiết thân thiện, trả lời bằng tiếng Việt tự nhiên. "
     "Dùng emoji phù hợp (🌧️ 🌤️ 💨 💧). "
-    "Tóm tắt ngắn gọn, dễ hiểu, và đưa ra lời khuyên thực tế "
-    "(ví dụ: mang ô, mặc áo mỏng, ...)."
+    "Tóm tắt ngắn gọn, dễ hiểu và đưa ra lời khuyên thực tế. "
+    "Đây là dữ liệu GIẢ LẬP, không phải thời tiết thực tế. "
+    "Không tự đoán số liệu khi tool không có dữ liệu."
 )
 
 # 1. App tự định nghĩa schema của tool
@@ -31,7 +28,8 @@ get_weather_declaration = types.FunctionDeclaration(
         type=types.Type.OBJECT,
         properties={
             "city": types.Schema(
-                type=types.Type.STRING, description="Tên thành phố"
+                type=types.Type.STRING,
+                description="Tên thành phố",
             )
         },
         required=["city"],
@@ -41,9 +39,9 @@ get_weather_declaration = types.FunctionDeclaration(
 TOOLS = [types.Tool(function_declarations=[get_weather_declaration])]
 
 
-# 2. App tự thực thi tool (trong thực tế sẽ gọi API thời tiết thật)
+# 2. App tự thực thi tool (mock)
 def get_weather(city: str) -> str:
-    """Trả về thời tiết (mock) của *city*. Dùng làm tool cho model."""
+    """Trả về thời tiết giả lập của city."""
     mock_data = {
         "Hà Nội": {
             "nhiệt_độ": "29°C",
@@ -64,19 +62,29 @@ def get_weather(city: str) -> str:
             "gió": {"hướng": "Đông", "tốc_độ": "10 km/h"},
         },
     }
+
     import json
 
-    default = {"nhiệt_độ": "28°C", "thời_tiết": "không có dữ liệu chi tiết"}
-    return json.dumps({"city": city, **mock_data.get(city, default)}, ensure_ascii=False)
+    default = {
+        "thời_tiết": "không có dữ liệu giả lập cho thành phố này"
+    }
+
+    return json.dumps(
+        {"city": city, **mock_data.get(city, default)},
+        ensure_ascii=False,
+    )
 
 
 def run(prompt: str) -> str:
-    """Gửi *prompt* tới Gemini, tự động xử lý function calling và trả về câu trả lời cuối."""
+    """Gửi prompt tới Gemini và xử lý function calling."""
     contents: list[types.Content] = [
-        types.Content(role="user", parts=[types.Part.from_text(text=prompt)])
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=prompt)],
+        )
     ]
 
-    # 3. Gọi model — model quyết định có gọi tool hay không
+    # 3. Model quyết định có gọi tool hay không
     resp = client.models.generate_content(
         model=MODEL,
         contents=contents,
@@ -86,24 +94,48 @@ def run(prompt: str) -> str:
         ),
     )
 
-    # 4. Vòng lặp: nếu model yêu cầu tool, app TỰ THỰC THI rồi đưa kết quả trả lại
+    # 4. App tự thực thi các tool model yêu cầu
+    tool_rounds = 0
+
     while resp.function_calls:
-        # Thêm phản hồi của model vào lịch sử hội thoại
+        tool_rounds += 1
+
+        if tool_rounds > 5:
+            raise RuntimeError(
+                "Model gọi tool quá 5 vòng — dừng để tránh lặp vô hạn"
+            )
+
         contents.append(resp.candidates[0].content)
 
         function_responses = []
+
         for fc in resp.function_calls:
             print(f"  [model yêu cầu] {fc.name}({fc.args})")
-            result = get_weather(**fc.args)  # <-- app chạy, không phải model
-            print(f"  [app thực thi]  -> {result}")
+
+            if (
+                fc.name == "get_weather"
+                and isinstance((fc.args or {}).get("city"), str)
+            ):
+                result = get_weather(city=fc.args["city"])
+            else:
+                result = "Lỗi: tool hoặc tham số không hợp lệ"
+
+            print(f"  [app thực thi] -> {result}")
+
             function_responses.append(
                 types.Part.from_function_response(
-                    name=fc.name, response={"result": result}
+                    name=fc.name,
+                    response={"result": result},
                 )
             )
 
-        # Gửi kết quả tool trả về cho model
-        contents.append(types.Content(role="user", parts=function_responses))
+        contents.append(
+            types.Content(
+                role="user",
+                parts=function_responses,
+            )
+        )
+
         resp = client.models.generate_content(
             model=MODEL,
             contents=contents,
@@ -113,8 +145,8 @@ def run(prompt: str) -> str:
             ),
         )
 
-    # 5. Model tổng hợp câu trả lời cuối
-    return resp.text
+    # 5. Model tổng hợp câu trả lời
+    return resp.text or "Model không tạo câu trả lời."
 
 
 if __name__ == "__main__":
