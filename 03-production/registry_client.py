@@ -1,4 +1,4 @@
-﻿"""Tool Registry Client — agent khám phá tool từ danh mục trung tâm.
+"""Tool Registry Client — agent khám phá tool từ danh mục trung tâm.
 
 Thay vì hard-code "server nào có tool nào", agent hỏi Tool Registry:
   "Tôi cần tool có tag 'weather'" → Registry trả về get_weather, server weather, stdio
@@ -161,4 +161,3 @@ async def main() -> None:
 
 if __name__ == "__main__":
     asyncio.run(main())
-
